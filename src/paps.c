@@ -137,6 +137,7 @@ typedef struct {
   PangoRectangle logical_rect;
   PangoRectangle ink_rect;
   int formfeed;
+  int ends_cr;
   gboolean wrapped;   // Whether the paragraph was character wrapped
 } LineLink;
 
@@ -149,6 +150,7 @@ struct _Paragraph {
   int length;
   int height;   /* Height, in pixels */
   int formfeed;
+  int ends_cr;
   gboolean wrapped; 
   gboolean clipped;   // Whether the line was clipped. Used for CPI.
   PangoLayout *layout;
@@ -441,6 +443,8 @@ static cairo_status_t paps_cairo_write_func(void *closure G_GNUC_UNUSED,
   return CAIRO_STATUS_SUCCESS;
 }
 
+gboolean do_trunc = FALSE;
+
 int main(int argc, char *argv[])
 {
   gboolean do_landscape = FALSE, do_rtl = FALSE, do_justify = FALSE, do_draw_header = FALSE, do_draw_footer=FALSE;
@@ -459,6 +463,8 @@ int main(int argc, char *argv[])
   page_layout_t page_layout;
   GOptionContext *ctxt = g_option_context_new("[text file]");
   GOptionEntry entries[] = {
+    {"trunc", 0, 0, G_OPTION_ARG_NONE, &do_trunc,
+     N_("Truncate long lines, rather than wrapping"), NULL},
     {"landscape", 0, 0, G_OPTION_ARG_NONE, &do_landscape,
      N_("Landscape output. (Default: portrait)"), NULL},
     {"columns", 0, 0, G_OPTION_ARG_INT, &num_columns,
@@ -903,6 +909,7 @@ split_text_into_paragraphs (cairo_t *cr,
       Paragraph *para = g_new (Paragraph, 1);
       para->wrapped = FALSE; /* No wrapped chars for markups */
       para->clipped = FALSE;
+      para->ends_cr = FALSE;
       para->text = text;
       para->length = strlen(text);
       para->layout = pango_layout_new (pango_context);
@@ -937,10 +944,13 @@ split_text_into_paragraphs (cairo_t *cr,
               para->wrapped = FALSE;
               para->clipped = FALSE;
               para->text = last_para;
+              para->ends_cr = FALSE;
               para->length = p - last_para;
               /* handle dos line breaks */
               if (wc == '\r' && *next == '\n')
                   next = g_utf8_next_char(next);
+              else if (wc == '\r')
+                 para->ends_cr = TRUE;
               para->layout = pango_layout_new (pango_context);
               if (page_layout->cpi > 0.0L)
                 {
@@ -1075,8 +1085,9 @@ split_paragraphs_into_lines(page_layout_t *page_layout,
       Paragraph *para = par_list->data;
 
       para_num_lines = pango_layout_get_line_count(para->layout);
-
-      for (i=0; i<para_num_lines; i++)
+      int limit = para_num_lines;
+      if (do_trunc) limit = 1;
+      for (i=0; i<limit; i++)
         {
           PangoRectangle logical_rect, ink_rect;
           
@@ -1091,6 +1102,10 @@ split_paragraphs_into_lines(page_layout_t *page_layout,
               line_link->formfeed = 1;
           line_link->ink_rect = ink_rect;
           line_list = g_list_prepend(line_list, line_link);
+         if (para->ends_cr) 
+            line_link->ends_cr = TRUE;
+         else
+            line_link->ends_cr = FALSE;
           if (logical_rect.height > max_height)
               max_height = logical_rect.height;
         }
@@ -1226,7 +1241,8 @@ output_pages(cairo_surface_t *surface,
                         page_layout,
                         line,
                         draw_wrap_character);
-      column_y_pos += height;
+      if (!line_link->ends_cr)
+         column_y_pos += height;
       pango_lines = pango_lines->next;
       prev_line_link = line_link;
     }
