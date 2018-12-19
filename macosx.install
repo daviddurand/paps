@@ -1,0 +1,1 @@
+$ ./configure --disable-nls --disable-dependency-tracking
